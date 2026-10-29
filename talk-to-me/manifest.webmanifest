@@ -1,0 +1,19 @@
+{
+  "name": "Talk to me",
+  "short_name": "Talk to me",
+  "description": "Pratique inglês conversando com personagens de IA e amigos reais.",
+  "lang": "pt-BR",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0ea5a4",
+  "theme_color": "#12c497",
+  "categories": ["education", "social"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

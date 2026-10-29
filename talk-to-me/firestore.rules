@@ -1,0 +1,47 @@
+rules_version = '2';
+// Regras de segurança do Talk to me.
+// Cole no Firebase Console → Firestore Database → Regras → Publicar.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+
+    // Perfil: qualquer pessoa logada lê o nome; só o dono altera.
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && request.auth.uid == uid;
+
+      // Contatos: o dono lê os seus. Ao adicionar alguém por código,
+      // você grava o contato na sua lista e grava VOCÊ na lista da outra pessoa.
+      match /contacts/{other} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn() && (request.auth.uid == uid || request.auth.uid == other);
+        allow delete: if signedIn() && request.auth.uid == uid;
+      }
+    }
+
+    // Códigos de convite: leitura para quem está logado; cada um cria o seu.
+    match /codes/{code} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+    }
+
+    // Conversas: o id é "uidA_uidB". Só os dois participantes leem e escrevem.
+    match /threads/{tid} {
+      allow read: if signedIn() && request.auth.uid in resource.data.members;
+      allow create, update: if signedIn()
+        && request.auth.uid in request.resource.data.members
+        && request.auth.uid in tid.split('_');
+
+      match /messages/{mid} {
+        allow read: if signedIn() && request.auth.uid in tid.split('_');
+        allow create: if signedIn() && request.auth.uid in tid.split('_')
+          && request.resource.data.from == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() <= 4000;
+        // Só o autor atualiza (para salvar os erros sublinhados da própria mensagem).
+        allow update: if signedIn() && resource.data.from == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['errs']);
+      }
+    }
+  }
+}
