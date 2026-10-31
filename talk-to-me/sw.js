@@ -1,6 +1,6 @@
 // Service worker: deixa o app instalável e abre a tela inicial mesmo com internet fraca.
 // Estratégia: tenta a rede primeiro (para sempre pegar a versão nova) e usa o cache como reserva.
-const CACHE = "talktome-v4";
+const CACHE = "talktome-v5";
 const SHELL = ["/", "/index.html", "/style.css", "/scripts.js", "/scripts-intl.js", "/core.js", "/backend-firebase.js", "/ai-providers.js", "/firebase-config.js", "/pwa.js",
   "/logo.svg", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", "/icons/apple-touch-icon.png"];
 

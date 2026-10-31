@@ -4,13 +4,19 @@
    - IA: chave própria de cada pessoa (Gemini, Claude ou ChatGPT, direto do navegador)
      ou, se o dono ativou, a IA do app pela rota /api/chat */
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signInWithRedirect, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { initializeAuth, indexedDBLocalPersistence, browserLocalPersistence, browserPopupRedirectResolver, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signInWithRedirect, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, updateProfile } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, query, where, orderBy, limit, onSnapshot, addDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 import { PROVIDERS, loadAi, saveAi, clearAi, callProvider } from "./ai-providers.js";
 
 const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
+// Sessão salva no aparelho: a pessoa continua conectada até tocar em "Sair".
+const auth = initializeAuth(app, {
+  persistence: [indexedDBLocalPersistence, browserLocalPersistence],
+  popupRedirectResolver: browserPopupRedirectResolver
+});
+auth.languageCode = "pt";
+let pendingName = "";
 const db = getFirestore(app);
 const $ = id => document.getElementById(id);
 
@@ -56,12 +62,15 @@ function makeCode() {
   let s = ""; for (let i = 0; i < 6; i++) s += A[Math.floor(Math.random() * A.length)];
   return s;
 }
+function displayNameOf(user) {
+  return (pendingName || user.displayName || (user.email ? user.email.split("@")[0] : "") || "Sem nome").slice(0, 40);
+}
 async function ensureProfile(user) {
   const ref = doc(db, "users", user.uid);
   const snap = await getDoc(ref);
   if (snap.exists() && snap.data().code) {
     myCode = snap.data().code;
-    await updateDoc(ref, { name: user.displayName || "Sem nome", seen: Date.now() });
+    await updateDoc(ref, { name: displayNameOf(user), seen: Date.now() });
     return;
   }
   for (let i = 0; i < 5; i++) {
@@ -72,7 +81,7 @@ async function ensureProfile(user) {
     myCode = c;
     break;
   }
-  await setDoc(ref, { name: user.displayName || "Sem nome", code: myCode, createdAt: Date.now(), seen: Date.now() }, { merge: true });
+  await setDoc(ref, { name: displayNameOf(user), code: myCode, createdAt: Date.now(), seen: Date.now() }, { merge: true });
 }
 async function addByCode(raw) {
   const code = String(raw || "").trim().toUpperCase();
@@ -280,6 +289,8 @@ async function openSettings() {
 
   const privacy = el("p", "muted small", "Sua chave fica salva só neste aparelho e vai direto para o provedor escolhido. Ela não passa pelo servidor do app. Dica: defina um limite de gastos na conta do provedor.");
   card.append(list, body, actions, msg, privacy);
+  const u = auth.currentUser;
+  if (u) card.append(el("p", "muted small", "Conectado como " + (u.email || u.displayName || "você") + ". A sessão fica salva neste aparelho."));
   const out = el("button", "linkbtn", "Sair da conta do app"); out.type = "button";
   out.onclick = () => signOut(auth).then(() => location.reload());
   card.append(out);
@@ -289,8 +300,64 @@ async function openSettings() {
 }
 
 /* ---------- login ---------- */
+let signup = false;
+function setMsg(text, err) { const m = $("loginMsg"); m.textContent = text || ""; m.className = "authmsg" + (err ? " err" : ""); }
+function setTab(isSignup) {
+  signup = isSignup;
+  $("tabLogin").setAttribute("aria-selected", String(!isSignup));
+  $("tabSignup").setAttribute("aria-selected", String(isSignup));
+  $("authName").hidden = $("nameLab").hidden = !isSignup;
+  $("authGo").textContent = isSignup ? "Criar conta" : "Entrar";
+  $("forgot").hidden = isSignup;
+  $("authPass").autocomplete = isSignup ? "new-password" : "current-password";
+  setMsg("");
+}
+const AUTH_ERR = {
+  "auth/invalid-email": "Esse e-mail não parece válido.",
+  "auth/missing-password": "Digite sua senha.",
+  "auth/weak-password": "A senha precisa ter pelo menos 6 caracteres.",
+  "auth/email-already-in-use": "Já existe uma conta com esse e-mail. Toque em Entrar.",
+  "auth/invalid-credential": "E-mail ou senha incorretos.",
+  "auth/wrong-password": "E-mail ou senha incorretos.",
+  "auth/user-not-found": "Não achamos conta com esse e-mail. Toque em Criar conta.",
+  "auth/too-many-requests": "Muitas tentativas. Espere alguns minutos e tente de novo.",
+  "auth/network-request-failed": "Sem conexão. Verifique a internet.",
+  "auth/operation-not-allowed": "O login por e-mail ainda não foi ativado no Firebase."
+};
+const errText = e => AUTH_ERR[e && e.code] || "Não deu certo. Tente de novo.";
+
+$("tabLogin").onclick = () => setTab(false);
+$("tabSignup").onclick = () => setTab(true);
+$("showPass").onclick = () => {
+  const p = $("authPass"); p.type = p.type === "password" ? "text" : "password";
+  $("showPass").textContent = p.type === "password" ? "Mostrar" : "Ocultar";
+};
+$("authForm").onsubmit = async e => {
+  e.preventDefault();
+  const email = $("authEmail").value.trim(), pass = $("authPass").value, name = $("authName").value.trim();
+  if (signup && !name) return setMsg("Digite seu nome.", true);
+  if (!email) return setMsg("Digite seu e-mail.", true);
+  if (pass.length < 6) return setMsg("A senha precisa ter pelo menos 6 caracteres.", true);
+  $("authGo").disabled = true; setMsg(signup ? "Criando sua conta…" : "Entrando…");
+  try {
+    if (signup) {
+      pendingName = name;
+      const cred = await createUserWithEmailAndPassword(auth, email, pass);
+      await updateProfile(cred.user, { displayName: name }).catch(() => {});
+    } else {
+      await signInWithEmailAndPassword(auth, email, pass);
+    }
+  } catch (err) { pendingName = ""; setMsg(errText(err), true); }
+  $("authGo").disabled = false;
+};
+$("forgot").onclick = async () => {
+  const email = $("authEmail").value.trim();
+  if (!email) return setMsg("Digite seu e-mail acima e toque de novo em Esqueci minha senha.", true);
+  try { await sendPasswordResetEmail(auth, email); setMsg("Enviamos um link para criar uma senha nova. Confira seu e-mail (e o spam)."); }
+  catch (err) { setMsg(errText(err), true); }
+};
 $("googleBtn").onclick = async () => {
-  $("loginMsg").textContent = "Abrindo o Google…";
+  setMsg("Abrindo o Google…");
   const provider = new GoogleAuthProvider();
   // App instalado na tela inicial (principalmente iPhone) costuma bloquear janelas pop-up:
   // nesse caso o login abre na mesma tela e volta para o app.
@@ -302,14 +369,20 @@ $("googleBtn").onclick = async () => {
     if (e && (e.code === "auth/popup-blocked" || e.code === "auth/operation-not-supported-in-this-environment")) {
       try { await signInWithRedirect(auth, provider); return; } catch (e2) {}
     }
-    $("loginMsg").textContent = "Não foi possível entrar. Tente de novo.";
+    if (e && e.code === "auth/popup-closed-by-user") return setMsg("");
+    setMsg("Não foi possível entrar com o Google. Use e-mail e senha.", true);
   }
 };
 onAuthStateChanged(auth, async user => {
-  if (!user) { $("login").hidden = false; $("app").hidden = true; $("loginMsg").textContent = "Grátis. Só precisa de uma conta Google."; return; }
+  $("loadingMsg").hidden = true;
+  if (!user) {
+    $("login").hidden = false; $("app").hidden = true;
+    $("authCard").hidden = false; $("keepNote").hidden = false;
+    return;
+  }
   me = user.uid;
-  $("loginMsg").textContent = "Entrando…";
   try { await ensureProfile(user); } catch (e) { console.error(e); }
+  pendingName = "";
   $("login").hidden = true; $("app").hidden = false;
   if (!started) { started = true; window.startApp(); }
 });
